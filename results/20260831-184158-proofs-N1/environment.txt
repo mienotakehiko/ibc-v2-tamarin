@@ -1,0 +1,44 @@
+timestamp=2026-08-31T18:41:58+09:00
+
+cwd=/home/mieno/work/ibcv2-tamarin-rev6/tamarin
+
+tamarin_command=/home/mieno/.local/bin/tamarin-prover-1.12.0
+
+tamarin_version=maude tool: 'maude'
+ checking version: tamarin-prover 1.12.0, (C) David Basin, Cas Cremers, Jannik Dreier, Simon Meier, Ralf Sasse, Benedikt Schmidt, 2010-2023
+
+This program comes with ABSOLUTELY NO WARRANTY. It is free software, and you
+are welcome to redistribute it according to its LICENSE, see
+'https://github.com/tamarin-prover/tamarin-prover/blob/master/LICENSE'.
+
+3.5.1. OK.
+ checking installation: OK.
+Generated from:
+Tamarin version 1.12.0
+Maude version 3.5.1
+Git revision: 82780bbaf3328a45f624ddb41e51bf75425f851c (with uncommited changes), branch: master
+Compiled at: 2026-03-07 14:22:39.174278293 UTC
+
+maude_version=3.5.1
+
+python=3.14.6 (main, Jun 10 2026, 10:03:53) [GCC 13.3.0]
+
+threads_fixed=1
+
+heap_cap_gb=8
+
+uname=Linux research-m-pc 5.15.153.1-microsoft-standard-WSL2 #1 SMP Fri Mar 29 23:14:13 UTC 2024 x86_64 x86_64 x86_64 GNU/Linux
+
+memory=total        used        free      shared  buff/cache   available
+Mem:            50Gi       822Mi        50Gi       1.1Mi       157Mi        50Gi
+Swap:           12Gi        79Mi        11Gi
+
+sha256[ibcv2_transport_nat.spthy]=3e277ac4bbc2970de6f29ee4f9f8fcb69330fcc443a596a84a343ea5ccf4518c
+
+sha256[ibcv2_p4_nat_diagnostic.spthy]=ff2a790b22a44a58fc165b2617fd52fda1034e0c05c5e43d73b9dbe2c449783d
+
+sha256[ibcv2_ics20_projection.spthy]=5b3696de6dde270ab68745697196dec59eccd9bed2eb06b854dbbbe9b542aaf9
+
+sha256[measure_rev6.py]=af165e09a73f568b8e404ebd1d2b9d9fd01f1896c16f49679f1386134b086b02
+
+sha256[Makefile]=ec013d0e8c27e1b7621a54931e726bad48b3e0994c4fa0ce4c4e6b415b6e2352

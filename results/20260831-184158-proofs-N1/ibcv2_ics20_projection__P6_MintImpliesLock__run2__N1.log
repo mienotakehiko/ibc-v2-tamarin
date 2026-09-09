@@ -1,0 +1,242 @@
+maude tool: 'maude'
+ checking version: 3.5.1. OK.
+ checking installation: OK.
+[Theory IBCv2_ICS20_Projection] Theory loaded
+[Theory IBCv2_ICS20_Projection] Theory translated
+[Theory IBCv2_ICS20_Projection] Derivation checks started
+[Theory IBCv2_ICS20_Projection] Derivation checks ended
+[Theory IBCv2_ICS20_Projection] Theory closed
+[Saturating Sources] Step 1 (Max 5)
+[Saturating Sources] Done
+theory IBCv2_ICS20_Projection
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, h/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) Setup_Pair:
+   [
+   Fr( ~chainA ), Fr( ~chainB ), Fr( ~cs ), Fr( ~cd ), Fr( ~srcPort ),
+   Fr( ~dstPort )
+   ]
+  --[ PairSetup( ~chainA, ~cs, ~chainB, ~cd ) ]->
+   [
+   !Pair( ~chainA, ~cs, ~chainB, ~cd ), !Port( ~chainA, ~srcPort ),
+   !Port( ~chainB, ~dstPort ),
+   Out( <~chainA, ~chainB, ~cs, ~cd, ~srcPort, ~dstPort> )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ICS20_UserFunds:
+   [ !Pair( A, cs, B, cd ), Fr( ~u ), Fr( ~v ) ]
+  --[ Funded( A, ~u, ~v ) ]->
+   [ Funds( A, ~u, ~v ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ICS20_SendPacket:
+   [
+   !Pair( A, cs, B, cd ), !Port( A, srcPort ), !Port( B, dstPort ),
+   Funds( A, u, v ), Fr( ~s ), In( tau )
+   ]
+  --[
+  Send( A, B, <cs, cd, ~s, tau, srcPort, dstPort, 'ICS20', u, v>, cs, cd,
+        ~s, tau, srcPort, dstPort
+  ),
+  Lock( A, B, cs, cd, ~s, u, v )
+  ]->
+   [
+   !CommitHist( A, cs, ~s,
+                h(<cs, cd, ~s, tau, srcPort, dstPort, 'ICS20', u, v>)
+   ),
+   PacketOpen( A, B, cs, cd, ~s,
+               <cs, cd, ~s, tau, srcPort, dstPort, 'ICS20', u, v>, u, v
+   ),
+   Escrow( A, B, cs, cd, ~s, u, v ),
+   Out( <cs, cd, ~s, tau, srcPort, dstPort, 'ICS20', u, v> )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ICS20_RecvAndMint:
+   [
+   !Pair( A, cs, B, cd ), !CommitHist( A, cs, s, hh ),
+   PacketOpen( A, B, cs, cd, s,
+               <cs, cd, s, tau, srcPort, dstPort, 'ICS20', u, v>, u, v
+   ),
+   In( <cs, cd, s, tau, srcPort, dstPort, 'ICS20', u, v> )
+   ]
+  --[
+  Eq( hh, h(<cs, cd, s, tau, srcPort, dstPort, 'ICS20', u, v>) ),
+  Recv( B, A, <cs, cd, s, tau, srcPort, dstPort, 'ICS20', u, v>, cs, cd, s,
+        tau, srcPort, dstPort
+  ),
+  Mint( B, A, cs, cd, s, u, v )
+  ]->
+   [ !Receipt( B, cd, s ), Voucher( B, A, cs, cd, s, u, v ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ICS20_TimeoutAndRefund:
+   [
+   !Pair( A, cs, B, cd ), !CommitHist( A, cs, s, hh ),
+   PacketOpen( A, B, cs, cd, s,
+               <cs, cd, s, tau, srcPort, dstPort, 'ICS20', u, v>, u, v
+   ),
+   Escrow( A, B, cs, cd, s, u, v ),
+   In( <cs, cd, s, tau, srcPort, dstPort, 'ICS20', u, v> )
+   ]
+  --[
+  Eq( hh, h(<cs, cd, s, tau, srcPort, dstPort, 'ICS20', u, v>) ),
+  Timeout( A, B, <cs, cd, s, tau, srcPort, dstPort, 'ICS20', u, v>, cs, cd,
+           s, tau
+  ),
+  Refund( A, B, cs, cd, s, u, v )
+  ]->
+   [ RefundedFunds( A, u, v ) ]
+
+  /* has exactly the trivial AC variant */
+
+restriction Equality:
+  "∀ x y #i. (Eq( x, y ) @ #i) ⇒ (x = y)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x y #i. (Eq( x, y ) @ #i) ⇒ (x = y)"
+  */
+
+lemma ExecutableICS20Mint:
+  exists-trace
+  "∃ A B p cs cd s tau sp dp u v #l #m.
+    (((Lock( A, B, cs, cd, s, u, v ) @ #l) ∧
+      (Recv( B, A, p, cs, cd, s, tau, sp, dp ) @ #m)) ∧
+     (Mint( B, A, cs, cd, s, u, v ) @ #m)) ∧
+    (#l < #m)"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ A B p cs cd s tau sp dp u v #l #m.
+  (Lock( A, B, cs, cd, s, u, v ) @ #l) ∧
+  (Recv( B, A, p, cs, cd, s, tau, sp, dp ) @ #m) ∧
+  (Mint( B, A, cs, cd, s, u, v ) @ #m)
+ ∧
+  #l < #m"
+*/
+by sorry
+
+lemma ExecutableICS20Refund:
+  exists-trace
+  "∃ A B p cs cd s tau u v #l #r.
+    (((Lock( A, B, cs, cd, s, u, v ) @ #l) ∧
+      (Timeout( A, B, p, cs, cd, s, tau ) @ #r)) ∧
+     (Refund( A, B, cs, cd, s, u, v ) @ #r)) ∧
+    (#l < #r)"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ A B p cs cd s tau u v #l #r.
+  (Lock( A, B, cs, cd, s, u, v ) @ #l) ∧
+  (Timeout( A, B, p, cs, cd, s, tau ) @ #r) ∧
+  (Refund( A, B, cs, cd, s, u, v ) @ #r)
+ ∧
+  #l < #r"
+*/
+by sorry
+
+lemma P6_MintImpliesLock [reuse]:
+  all-traces
+  "∀ B A cs cd s u v #m.
+    (Mint( B, A, cs, cd, s, u, v ) @ #m) ⇒
+    (∃ #l. (Lock( A, B, cs, cd, s, u, v ) @ #l) ∧ (#l < #m))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ B A cs cd s u v #m.
+  (Mint( B, A, cs, cd, s, u, v ) @ #m)
+ ∧
+  ∀ #l. (Lock( A, B, cs, cd, s, u, v ) @ #l) ⇒ ¬(#l < #m)"
+*/
+simplify
+solve( !Pair( A, cs, B, cd ) ▶₀ #m )
+  case Setup_Pair
+  solve( !CommitHist( ~chainA, ~cs, s,
+                      h(<~cs, ~cd, s, tau, srcPort, dstPort, 'ICS20', u, v>)
+         ) ▶₁ #m )
+    case ICS20_SendPacket
+    by contradiction /* from formulas */
+  qed
+qed
+
+lemma P6_RefundImpliesLock [reuse]:
+  all-traces
+  "∀ A B cs cd s u v #r.
+    (Refund( A, B, cs, cd, s, u, v ) @ #r) ⇒
+    (∃ #l. (Lock( A, B, cs, cd, s, u, v ) @ #l) ∧ (#l < #r))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ A B cs cd s u v #r.
+  (Refund( A, B, cs, cd, s, u, v ) @ #r)
+ ∧
+  ∀ #l. (Lock( A, B, cs, cd, s, u, v ) @ #l) ⇒ ¬(#l < #r)"
+*/
+by sorry
+
+lemma P6_NoDoubleMint [reuse]:
+  all-traces
+  "∀ B A cs cd s u1 u2 v1 v2 #i #j.
+    ((Mint( B, A, cs, cd, s, u1, v1 ) @ #i) ∧
+     (Mint( B, A, cs, cd, s, u2, v2 ) @ #j)) ⇒
+    (#i = #j)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ B A cs cd s u1 u2 v1 v2 #i #j.
+  (Mint( B, A, cs, cd, s, u1, v1 ) @ #i) ∧
+  (Mint( B, A, cs, cd, s, u2, v2 ) @ #j)
+ ∧
+  ¬(#i = #j)"
+*/
+by sorry
+
+lemma P6_NoMintAndRefund:
+  all-traces
+  "∀ A B cs cd s u1 u2 v1 v2 #m #r.
+    ((Mint( B, A, cs, cd, s, u1, v1 ) @ #m) ∧
+     (Refund( A, B, cs, cd, s, u2, v2 ) @ #r)) ⇒
+    (⊥)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ A B cs cd s u1 u2 v1 v2 #m #r.
+  (Mint( B, A, cs, cd, s, u1, v1 ) @ #m) ∧
+  (Refund( A, B, cs, cd, s, u2, v2 ) @ #r)"
+*/
+by sorry
+
+/* All wellformedness checks were successful. */
+
+/*
+Generated from:
+Tamarin version 1.12.0
+Maude version 3.5.1
+Git revision: 82780bbaf3328a45f624ddb41e51bf75425f851c (with uncommited changes), branch: master
+Compiled at: 2026-03-07 14:22:39.174278293 UTC
+*/
+
+end
+
+==============================================================================
+summary of summaries:
+
+analyzed: /home/mieno/work/ibcv2-tamarin-rev6/tamarin/ibcv2_ics20_projection.spthy
+
+  processing time: 3.61s
+  
+  ExecutableICS20Mint (exists-trace): analysis incomplete (1 steps)
+  ExecutableICS20Refund (exists-trace): analysis incomplete (1 steps)
+  P6_MintImpliesLock (all-traces): verified (4 steps)
+  P6_RefundImpliesLock (all-traces): analysis incomplete (1 steps)
+  P6_NoDoubleMint (all-traces): analysis incomplete (1 steps)
+  P6_NoMintAndRefund (all-traces): analysis incomplete (1 steps)
+
+==============================================================================

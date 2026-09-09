@@ -1,0 +1,12 @@
+theory,lemma,runs,outcome,median_steps,median_wall_s_monotonic,median_maxrss_kb
+ibcv2_transport_nat.spthy,P1_AuthenticDelivery,3,verified,8,3.175529,110788
+ibcv2_transport_nat.spthy,P2_ExactlyOnceReceipt,3,verified,544,34.674817,467760
+ibcv2_transport_nat.spthy,P3_AckCorrespondence,3,verified,5,3.376019,108376
+ibcv2_transport_nat.spthy,ReceiptBeforeHeight,3,verified,3,2.422752,39996
+ibcv2_transport_nat.spthy,WitnessBeforeReceiptHeight,3,verified,3,2.270995,39928
+ibcv2_transport_nat.spthy,P4_TimeoutSafety,3,verified,25,3.728482,103228
+ibcv2_transport_nat.spthy,P5_ClientPortBinding,3,verified,2,2.422983,41572
+ibcv2_ics20_projection.spthy,P6_MintImpliesLock,3,verified,4,3.678381,58744
+ibcv2_ics20_projection.spthy,P6_RefundImpliesLock,3,verified,4,3.728445,56940
+ibcv2_ics20_projection.spthy,P6_NoDoubleMint,3,verified,16,3.97804,59464
+ibcv2_ics20_projection.spthy,P6_NoMintAndRefund,3,verified,7,3.779841,61252

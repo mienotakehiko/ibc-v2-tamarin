@@ -1,0 +1,246 @@
+/*
+ * IBC v2 -- integrated full theory with Tamarin natural numbers
+ * Revision: rev5 modular transport projection
+ * Target: Tamarin Prover 1.12.0 / Maude 3.5.1
+ *
+ * Changes from rev2:
+ *   - sequence numbers, timeout heights, and destination height use
+ *     Tamarin's natural-numbers builtin instead of multiset arithmetic;
+ *   - P4 helper lemmas use the native Nat ordering relation (<<);
+ *   - the helper-free P4 diagnostic is kept in a separate theory so that
+ *     normal full-proof runs cannot accidentally spend >10 min / multi-GiB
+ *     on that diagnostic obligation.
+ *
+ * Scope notes:
+ *   - single-payload transport projection of IBC v2;
+ *   - light-client membership/non-membership is axiomatized by model state;
+ */
+
+theory IBCv2_Transport_Nat
+begin
+
+builtins: hashing, natural-numbers
+
+// ---------------------------------------------------------------------------
+// 0. Pair/client/port setup.  For the A -> B direction verified here, only
+//    B's height is needed by Recv/Timeout.  This avoids an irrelevant second
+//    unbounded height process in proof search.
+// ---------------------------------------------------------------------------
+
+rule Setup_Pair:
+  [ Fr(~chainA), Fr(~chainB), Fr(~cs), Fr(~cd),
+    Fr(~srcPort), Fr(~dstPort) ]
+  --[ PairSetup(~chainA, ~cs, ~chainB, ~cd),
+      PortBound(~chainA, ~srcPort), PortBound(~chainB, ~dstPort) ]->
+  [ !Pair(~chainA, ~cs, ~chainB, ~cd),
+    !Port(~chainA, ~srcPort), !Port(~chainB, ~dstPort),
+    NextSeq(~chainA, ~cs, %1),
+    Height(~chainB, %1),
+    Out(<~chainA, ~chainB, ~cs, ~cd, ~srcPort, ~dstPort>) ]
+
+rule Tick:
+  [ Height(C, %t) ]
+  --[ TickAt(C, %t, %t %+ %1) ]->
+  [ Height(C, %t %+ %1) ]
+
+rule Witness_Height:
+  [ Height(C, %t) ]
+  --[ WitnessHeight(C, %t) ]->
+  [ Height(C, %t), !HeightW(C, %t) ]
+
+// ---------------------------------------------------------------------------
+// 1. Generic SendPacket
+// ---------------------------------------------------------------------------
+
+rule SendPacket:
+  let
+    p  = <cs, cd, %s, %tau, srcPort, dstPort, ~data>
+    hh = h(p)
+  in
+  [ !Pair(A, cs, B, cd),
+    !Port(A, srcPort), !Port(B, dstPort),
+    NextSeq(A, cs, %s),
+    Fr(~data),
+    In(%tau) ]
+  --[ Send(A, B, p, cs, cd, %s, %tau, srcPort, dstPort),
+      SendUnique(A, cs, %s) ]->
+  [ !CommitHist(A, cs, %s, hh),
+    CommitOpen(A, cs, %s, hh),
+    RecvOpen(B, cd, %s),
+    NextSeq(A, cs, %s %+ %1),
+    Out(p) ]
+
+// ---------------------------------------------------------------------------
+// 2. RecvPacket
+// ---------------------------------------------------------------------------
+
+rule RecvPacket:
+  let
+    p = <cs, cd, %s, %tau, srcPort, dstPort, data>
+    a = h(<'ACK', p>)
+  in
+  [ !Pair(A, cs, B, cd),
+    !CommitHist(A, cs, %s, hh),
+    RecvOpen(B, cd, %s),
+    !Port(B, dstPort),
+    Height(B, %tB),
+    In(p) ]
+  --[ Eq(hh, h(p)),
+      VerifyMembership(A, cs, %s, hh),
+      LeqN(%tB, %tau),
+      Recv(B, A, p, cs, cd, %s, %tau, srcPort, dstPort),
+      Dispatch(B, A, p, cs, cd, %s, %tau, srcPort, dstPort),
+      RecvAtHeight(B, cd, %s, %tB) ]->
+  [ !Receipt(B, cd, %s),
+    !AckStore(B, cd, %s, a),
+    Delivery(B, A, cs, cd, %s, p, data),
+    Height(B, %tB),
+    Out(<p, a>) ]
+
+// ---------------------------------------------------------------------------
+// 3. AcknowledgePacket: consumes the live source commitment.
+// ---------------------------------------------------------------------------
+
+rule AckPacket:
+  let
+    p = <cs, cd, %s, %tau, srcPort, dstPort, data>
+    a = h(<'ACK', p>)
+  in
+  [ !Pair(A, cs, B, cd),
+    CommitOpen(A, cs, %s, hh),
+    !AckStore(B, cd, %s, aa),
+    In(<p, a>) ]
+  --[ Eq(hh, h(p)), Eq(aa, a),
+      VerifyMembershipAck(B, cd, %s, a),
+      AckOK(A, B, p, cs, cd, %s, %tau, srcPort, dstPort) ]->
+  [ ]
+
+// ---------------------------------------------------------------------------
+// 4. TimeoutPacket
+// ---------------------------------------------------------------------------
+
+rule TimeoutPacket:
+  let p = <cs, cd, %s, %tau, srcPort, dstPort, data>
+  in
+  [ !Pair(A, cs, B, cd),
+    CommitOpen(A, cs, %s, hh),
+    RecvOpen(B, cd, %s),
+    !HeightW(B, %tW),
+    In(p) ]
+  --[ Eq(hh, h(p)),
+      VerifyNonMembership(B, cd, %s),
+      GtN(%tW, %tau),
+      Timeout(A, B, p, cs, cd, %s, %tau, %tW) ]->
+  [ RecvOpen(B, cd, %s),
+    TimeoutResult(A, B, cs, cd, %s, p) ]
+
+// ---------------------------------------------------------------------------
+// 5. Equality and native Nat ordering guards
+// ---------------------------------------------------------------------------
+
+restriction Equality:
+  "All x y #i. Eq(x,y) @ #i ==> x = y"
+
+restriction LeqNat:
+  "All x y #i. LeqN(x,y) @ #i ==> (x = y | x << y)"
+
+restriction GtNat:
+  "All x y #i. GtN(x,y) @ #i ==> y << x"
+
+// ---------------------------------------------------------------------------
+// 7. Sanity traces.  These should be searched with BFS.
+// ---------------------------------------------------------------------------
+
+lemma ExecutableRecv:
+  exists-trace
+  "Ex A B p cs cd s tau sp dp #i #j.
+      Send(A,B,p,cs,cd,s,tau,sp,dp) @ #i &
+      Recv(B,A,p,cs,cd,s,tau,sp,dp) @ #j &
+      #i < #j"
+
+lemma ExecutableAck:
+  exists-trace
+  "Ex A B p cs cd s tau sp dp #i #j #k.
+      Send(A,B,p,cs,cd,s,tau,sp,dp) @ #i &
+      Recv(B,A,p,cs,cd,s,tau,sp,dp) @ #j &
+      AckOK(A,B,p,cs,cd,s,tau,sp,dp) @ #k &
+      #i < #j & #j < #k"
+
+lemma ExecutableTimeout:
+  exists-trace
+  "Ex A B p cs cd s tau sp dp tW #i #k.
+      Send(A,B,p,cs,cd,s,tau,sp,dp) @ #i &
+      Timeout(A,B,p,cs,cd,s,tau,tW) @ #k &
+      #i < #k"
+
+// ---------------------------------------------------------------------------
+// 8. P1 Authentic Delivery
+// ---------------------------------------------------------------------------
+
+lemma P1_AuthenticDelivery [reuse]:
+  "All B A p cs cd s tau sp dp #j.
+      Recv(B,A,p,cs,cd,s,tau,sp,dp) @ #j
+      ==>
+      (Ex #i. Send(A,B,p,cs,cd,s,tau,sp,dp) @ #i & #i < #j)"
+
+// ---------------------------------------------------------------------------
+// 9. P2 Exactly-once Receipt
+// ---------------------------------------------------------------------------
+
+lemma P2_ExactlyOnceReceipt [reuse]:
+  "All B A1 A2 p1 p2 cs1 cs2 cd s tau1 tau2 sp1 sp2 dp1 dp2 #i #j.
+      Recv(B,A1,p1,cs1,cd,s,tau1,sp1,dp1) @ #i &
+      Recv(B,A2,p2,cs2,cd,s,tau2,sp2,dp2) @ #j
+      ==> #i = #j"
+
+// ---------------------------------------------------------------------------
+// 10. P3 ACK correspondence
+// ---------------------------------------------------------------------------
+
+lemma P3_AckCorrespondence [reuse]:
+  "All A B p cs cd s tau sp dp #k.
+      AckOK(A,B,p,cs,cd,s,tau,sp,dp) @ #k
+      ==>
+      (Ex #j. Recv(B,A,p,cs,cd,s,tau,sp,dp) @ #j & #j < #k)"
+
+// ---------------------------------------------------------------------------
+// 11. Height helper lemmas for P4
+// ---------------------------------------------------------------------------
+
+lemma ReceiptBeforeHeight [use_induction, reuse]:
+  "All B cd s tR tH #i #j.
+      RecvAtHeight(B,cd,s,tR) @ #i &
+      WitnessHeight(B,tH) @ #j &
+      #i < #j
+      ==> (tR = tH | tR << tH)"
+
+lemma WitnessBeforeReceiptHeight [use_induction, reuse]:
+  "All B cd s tH tR #i #j.
+      WitnessHeight(B,tH) @ #i &
+      RecvAtHeight(B,cd,s,tR) @ #j &
+      #i < #j
+      ==> (tH = tR | tH << tR)"
+
+// ---------------------------------------------------------------------------
+// 12. P4 Timeout Safety.  The helper-free version is intentionally NOT in
+//     this main theory; see ibcv2_p4_nat_diagnostic.spthy.
+// ---------------------------------------------------------------------------
+
+lemma P4_TimeoutSafety [reuse]:
+  "All A B p cs cd s tau tW #k.
+      Timeout(A,B,p,cs,cd,s,tau,tW) @ #k
+      ==>
+      not (Ex sp dp #j. Recv(B,A,p,cs,cd,s,tau,sp,dp) @ #j)"
+
+// ---------------------------------------------------------------------------
+// 13. P5 Client/Port Binding
+// ---------------------------------------------------------------------------
+
+lemma P5_ClientPortBinding [reuse]:
+  "All B A p cs cd s tau sp dp #j.
+      Dispatch(B,A,p,cs,cd,s,tau,sp,dp) @ #j
+      ==>
+      (Ex #i. Send(A,B,p,cs,cd,s,tau,sp,dp) @ #i & #i < #j)"
+
+
+end

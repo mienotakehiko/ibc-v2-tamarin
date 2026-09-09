@@ -1,0 +1,445 @@
+maude tool: 'maude'
+ checking version: 3.5.1. OK.
+ checking installation: OK.
+[Theory IBCv2_Transport_Nat] Theory loaded
+[Theory IBCv2_Transport_Nat] Theory translated
+[Theory IBCv2_Transport_Nat] Derivation checks started
+[Theory IBCv2_Transport_Nat] Derivation checks ended
+[Theory IBCv2_Transport_Nat] Theory closed
+[Saturating Sources] Step 1 (Max 5)
+[Saturating Sources] Done
+theory IBCv2_Transport_Nat
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: natural-numbers
+functions: fst/1, h/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+/* looping facts with injective instances: Height/2, NextSeq/3 */
+
+rule (modulo E) Setup_Pair:
+   [
+   Fr( ~chainA ), Fr( ~chainB ), Fr( ~cs ), Fr( ~cd ), Fr( ~srcPort ),
+   Fr( ~dstPort )
+   ]
+  --[
+  PairSetup( ~chainA, ~cs, ~chainB, ~cd ), PortBound( ~chainA, ~srcPort ),
+  PortBound( ~chainB, ~dstPort )
+  ]->
+   [
+   !Pair( ~chainA, ~cs, ~chainB, ~cd ), !Port( ~chainA, ~srcPort ),
+   !Port( ~chainB, ~dstPort ), NextSeq( ~chainA, ~cs, %1 ),
+   Height( ~chainB, %1 ),
+   Out( <~chainA, ~chainB, ~cs, ~cd, ~srcPort, ~dstPort> )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Tick:
+   [ Height( C, %t ) ]
+  --[ TickAt( C, %t, (%t%+%1) ) ]->
+   [ Height( C, (%t%+%1) ) ]
+
+  // loop breaker: [0]
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Witness_Height:
+   [ Height( C, %t ) ]
+  --[ WitnessHeight( C, %t ) ]->
+   [ Height( C, %t ), !HeightW( C, %t ) ]
+
+  // loop breaker: [0]
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) SendPacket:
+   [
+   !Pair( A, cs, B, cd ), !Port( A, srcPort ), !Port( B, dstPort ),
+   NextSeq( A, cs, %s ), Fr( ~data ), In( %tau )
+   ]
+  --[
+  Send( A, B, <cs, cd, %s, %tau, srcPort, dstPort, ~data>, cs, cd, %s,
+        %tau, srcPort, dstPort
+  ),
+  SendUnique( A, cs, %s )
+  ]->
+   [
+   !CommitHist( A, cs, %s, h(<cs, cd, %s, %tau, srcPort, dstPort, ~data>) ),
+   CommitOpen( A, cs, %s, h(<cs, cd, %s, %tau, srcPort, dstPort, ~data>) ),
+   RecvOpen( B, cd, %s ), NextSeq( A, cs, (%s%+%1) ),
+   Out( <cs, cd, %s, %tau, srcPort, dstPort, ~data> )
+   ]
+
+  // loop breaker: [3]
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) RecvPacket:
+   [
+   !Pair( A, cs, B, cd ), !CommitHist( A, cs, %s, hh ),
+   RecvOpen( B, cd, %s ), !Port( B, dstPort ), Height( B, %tB ),
+   In( <cs, cd, %s, %tau, srcPort, dstPort, data> )
+   ]
+  --[
+  Eq( hh, h(<cs, cd, %s, %tau, srcPort, dstPort, data>) ),
+  VerifyMembership( A, cs, %s, hh ), LeqN( %tB, %tau ),
+  Recv( B, A, <cs, cd, %s, %tau, srcPort, dstPort, data>, cs, cd, %s, %tau,
+        srcPort, dstPort
+  ),
+  Dispatch( B, A, <cs, cd, %s, %tau, srcPort, dstPort, data>, cs, cd, %s,
+            %tau, srcPort, dstPort
+  ),
+  RecvAtHeight( B, cd, %s, %tB )
+  ]->
+   [
+   !Receipt( B, cd, %s ),
+   !AckStore( B, cd, %s,
+              h(<'ACK', cs, cd, %s, %tau, srcPort, dstPort, data>)
+   ),
+   Delivery( B, A, cs, cd, %s, <cs, cd, %s, %tau, srcPort, dstPort, data>,
+             data
+   ),
+   Height( B, %tB ),
+   Out( <<cs, cd, %s, %tau, srcPort, dstPort, data>, 
+         h(<'ACK', cs, cd, %s, %tau, srcPort, dstPort, data>)>
+   )
+   ]
+
+  // loop breaker: [4]
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) AckPacket:
+   [
+   !Pair( A, cs, B, cd ), CommitOpen( A, cs, %s, hh ),
+   !AckStore( B, cd, %s, aa ),
+   In( <<cs, cd, %s, %tau, srcPort, dstPort, data>, 
+        h(<'ACK', cs, cd, %s, %tau, srcPort, dstPort, data>)>
+   )
+   ]
+  --[
+  Eq( hh, h(<cs, cd, %s, %tau, srcPort, dstPort, data>) ),
+  Eq( aa, h(<'ACK', cs, cd, %s, %tau, srcPort, dstPort, data>) ),
+  VerifyMembershipAck( B, cd, %s,
+                       h(<'ACK', cs, cd, %s, %tau, srcPort, dstPort, data>)
+  ),
+  AckOK( A, B, <cs, cd, %s, %tau, srcPort, dstPort, data>, cs, cd, %s,
+         %tau, srcPort, dstPort
+  )
+  ]->
+   [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) TimeoutPacket:
+   [
+   !Pair( A, cs, B, cd ), CommitOpen( A, cs, %s, hh ),
+   RecvOpen( B, cd, %s ), !HeightW( B, %tW ),
+   In( <cs, cd, %s, %tau, srcPort, dstPort, data> )
+   ]
+  --[
+  Eq( hh, h(<cs, cd, %s, %tau, srcPort, dstPort, data>) ),
+  VerifyNonMembership( B, cd, %s ), GtN( %tW, %tau ),
+  Timeout( A, B, <cs, cd, %s, %tau, srcPort, dstPort, data>, cs, cd, %s,
+           %tau, %tW
+  )
+  ]->
+   [
+   RecvOpen( B, cd, %s ),
+   TimeoutResult( A, B, cs, cd, %s,
+                  <cs, cd, %s, %tau, srcPort, dstPort, data>
+   )
+   ]
+
+  // loop breaker: [2]
+  /* has exactly the trivial AC variant */
+
+restriction Equality:
+  "∀ x y #i. (Eq( x, y ) @ #i) ⇒ (x = y)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x y #i. (Eq( x, y ) @ #i) ⇒ (x = y)"
+  */
+
+restriction LeqNat:
+  "∀ x y #i. (LeqN( x, y ) @ #i) ⇒ ((x = y) ∨ (x ⊏ y))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x y #i. (LeqN( x, y ) @ #i) ⇒ ((x = y) ∨ (x ⊏ y))"
+  */
+
+restriction GtNat:
+  "∀ x y #i. (GtN( x, y ) @ #i) ⇒ (y ⊏ x)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x y #i. (GtN( x, y ) @ #i) ⇒ (y ⊏ x)"
+  */
+
+lemma ExecutableRecv:
+  exists-trace
+  "∃ A B p cs cd s tau sp dp #i #j.
+    ((Send( A, B, p, cs, cd, s, tau, sp, dp ) @ #i) ∧
+     (Recv( B, A, p, cs, cd, s, tau, sp, dp ) @ #j)) ∧
+    (#i < #j)"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ A B p cs cd s tau sp dp #i #j.
+  (Send( A, B, p, cs, cd, s, tau, sp, dp ) @ #i) ∧
+  (Recv( B, A, p, cs, cd, s, tau, sp, dp ) @ #j)
+ ∧
+  #i < #j"
+*/
+by sorry
+
+lemma ExecutableAck:
+  exists-trace
+  "∃ A B p cs cd s tau sp dp #i #j #k.
+    ((((Send( A, B, p, cs, cd, s, tau, sp, dp ) @ #i) ∧
+       (Recv( B, A, p, cs, cd, s, tau, sp, dp ) @ #j)) ∧
+      (AckOK( A, B, p, cs, cd, s, tau, sp, dp ) @ #k)) ∧
+     (#i < #j)) ∧
+    (#j < #k)"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ A B p cs cd s tau sp dp #i #j #k.
+  (Send( A, B, p, cs, cd, s, tau, sp, dp ) @ #i) ∧
+  (Recv( B, A, p, cs, cd, s, tau, sp, dp ) @ #j) ∧
+  (AckOK( A, B, p, cs, cd, s, tau, sp, dp ) @ #k)
+ ∧
+  (#i < #j) ∧ (#j < #k)"
+*/
+by sorry
+
+lemma ExecutableTimeout:
+  exists-trace
+  "∃ A B p cs cd s tau sp dp tW #i #k.
+    ((Send( A, B, p, cs, cd, s, tau, sp, dp ) @ #i) ∧
+     (Timeout( A, B, p, cs, cd, s, tau, tW ) @ #k)) ∧
+    (#i < #k)"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ A B p cs cd s tau sp dp tW #i #k.
+  (Send( A, B, p, cs, cd, s, tau, sp, dp ) @ #i) ∧
+  (Timeout( A, B, p, cs, cd, s, tau, tW ) @ #k)
+ ∧
+  #i < #k"
+*/
+by sorry
+
+lemma P1_AuthenticDelivery [reuse]:
+  all-traces
+  "∀ B A p cs cd s tau sp dp #j.
+    (Recv( B, A, p, cs, cd, s, tau, sp, dp ) @ #j) ⇒
+    (∃ #i. (Send( A, B, p, cs, cd, s, tau, sp, dp ) @ #i) ∧ (#i < #j))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ B A p cs cd s tau sp dp #j.
+  (Recv( B, A, p, cs, cd, s, tau, sp, dp ) @ #j)
+ ∧
+  ∀ #i. (Send( A, B, p, cs, cd, s, tau, sp, dp ) @ #i) ⇒ ¬(#i < #j)"
+*/
+by sorry
+
+lemma P2_ExactlyOnceReceipt [reuse]:
+  all-traces
+  "∀ B A1 A2 p1 p2 cs1 cs2 cd s tau1 tau2 sp1 sp2 dp1 dp2 #i #j.
+    ((Recv( B, A1, p1, cs1, cd, s, tau1, sp1, dp1 ) @ #i) ∧
+     (Recv( B, A2, p2, cs2, cd, s, tau2, sp2, dp2 ) @ #j)) ⇒
+    (#i = #j)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ B A1 A2 p1 p2 cs1 cs2 cd s tau1 tau2 sp1 sp2 dp1 dp2 #i #j.
+  (Recv( B, A1, p1, cs1, cd, s, tau1, sp1, dp1 ) @ #i) ∧
+  (Recv( B, A2, p2, cs2, cd, s, tau2, sp2, dp2 ) @ #j)
+ ∧
+  ¬(#i = #j)"
+*/
+by sorry
+
+lemma P3_AckCorrespondence [reuse]:
+  all-traces
+  "∀ A B p cs cd s tau sp dp #k.
+    (AckOK( A, B, p, cs, cd, s, tau, sp, dp ) @ #k) ⇒
+    (∃ #j. (Recv( B, A, p, cs, cd, s, tau, sp, dp ) @ #j) ∧ (#j < #k))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ A B p cs cd s tau sp dp #k.
+  (AckOK( A, B, p, cs, cd, s, tau, sp, dp ) @ #k)
+ ∧
+  ∀ #j. (Recv( B, A, p, cs, cd, s, tau, sp, dp ) @ #j) ⇒ ¬(#j < #k)"
+*/
+by sorry
+
+lemma ReceiptBeforeHeight [use_induction, reuse]:
+  all-traces
+  "∀ B cd s tR tH #i #j.
+    (((RecvAtHeight( B, cd, s, tR ) @ #i) ∧ (WitnessHeight( B, tH ) @ #j)) ∧
+     (#i < #j)) ⇒
+    ((tR = tH) ∨ (tR ⊏ tH))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ B cd s tR tH #i #j.
+  (RecvAtHeight( B, cd, s, tR ) @ #i) ∧ (WitnessHeight( B, tH ) @ #j)
+ ∧
+  (#i < #j) ∧ (¬(tR = tH)) ∧ (¬(tR ⊏ tH))"
+*/
+by sorry
+
+lemma WitnessBeforeReceiptHeight [use_induction, reuse]:
+  all-traces
+  "∀ B cd s tH tR #i #j.
+    (((WitnessHeight( B, tH ) @ #i) ∧ (RecvAtHeight( B, cd, s, tR ) @ #j)) ∧
+     (#i < #j)) ⇒
+    ((tH = tR) ∨ (tH ⊏ tR))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ B cd s tH tR #i #j.
+  (WitnessHeight( B, tH ) @ #i) ∧ (RecvAtHeight( B, cd, s, tR ) @ #j)
+ ∧
+  (#i < #j) ∧ (¬(tH = tR)) ∧ (¬(tH ⊏ tR))"
+*/
+by sorry
+
+lemma P4_TimeoutSafety [reuse]:
+  all-traces
+  "∀ A B p cs cd s tau tW #k.
+    (Timeout( A, B, p, cs, cd, s, tau, tW ) @ #k) ⇒
+    (¬(∃ sp dp #j. Recv( B, A, p, cs, cd, s, tau, sp, dp ) @ #j))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ A B p cs cd s tau tW #k.
+  (Timeout( A, B, p, cs, cd, s, tau, tW ) @ #k)
+ ∧
+  ∃ sp dp #j. (Recv( B, A, p, cs, cd, s, tau, sp, dp ) @ #j)"
+*/
+simplify
+solve( (%tB = %tau)  ∥ (%tB ⊏ %tau) )
+  case case_1
+  solve( !Pair( A, cs, B, cd ) ▶₀ #k )
+    case Setup_Pair
+    solve( CommitOpen( ~chainA, ~cs, %s,
+                       h(<~cs, ~cd, %s, %tB, sp, dp, ~data>)
+           ) ▶₁ #k )
+      case SendPacket
+      solve( !HeightW( ~chainB, %tW ) ▶₃ #k )
+        case Witness_Height
+        solve( !Pair( ~chainA, ~cs, ~chainB, ~cd ) ▶₀ #j )
+          case Setup_Pair
+          solve( !CommitHist( ~chainA, ~cs, %s,
+                              h(<~cs, ~cd, %s, %tB, ~srcPort, ~dstPort, ~data>)
+                 ) ▶₁ #j )
+            case SendPacket
+            solve( RecvOpen( ~chainB, ~cd, %s ) ▶₂ #j )
+              case SendPacket
+              solve( !Port( ~chainB, ~dstPort ) ▶₃ #j )
+                case Setup_Pair
+                solve( RecvOpen( ~chainB, ~cd, %s ) ▶₂ #k )
+                  case TimeoutPacket
+                  by contradiction /* cyclic */
+                qed
+              qed
+            next
+              case TimeoutPacket
+              by contradiction /* cyclic */
+            qed
+          qed
+        qed
+      qed
+    qed
+  qed
+next
+  case case_2
+  solve( !Pair( A, cs, B, cd ) ▶₀ #k )
+    case Setup_Pair
+    solve( CommitOpen( ~chainA, ~cs, %s,
+                       h(<~cs, ~cd, %s, %tau, sp, dp, ~data>)
+           ) ▶₁ #k )
+      case SendPacket
+      solve( !HeightW( ~chainB, %tW ) ▶₃ #k )
+        case Witness_Height
+        solve( (¬(#j < #vr.1))  ∥ (%tB = %tW)  ∥ (%tB ⊏ %tW) )
+          case case_1
+          by contradiction /* contradictory subterm store */
+        next
+          case case_2
+          by contradiction /* contradictory subterm store */
+        next
+          case case_3
+          solve( !Pair( ~chainA, ~cs, ~chainB, ~cd ) ▶₀ #j )
+            case Setup_Pair
+            solve( !CommitHist( ~chainA, ~cs, %s,
+                                h(<~cs, ~cd, %s, %tau, ~srcPort, ~dstPort, ~data>)
+                   ) ▶₁ #j )
+              case SendPacket
+              solve( RecvOpen( ~chainB, ~cd, %s ) ▶₂ #j )
+                case SendPacket
+                solve( !Port( ~chainB, ~dstPort ) ▶₃ #j )
+                  case Setup_Pair
+                  solve( RecvOpen( ~chainB, ~cd, %s ) ▶₂ #k )
+                    case TimeoutPacket
+                    by contradiction /* cyclic */
+                  qed
+                qed
+              next
+                case TimeoutPacket
+                by contradiction /* cyclic */
+              qed
+            qed
+          qed
+        qed
+      qed
+    qed
+  qed
+qed
+
+lemma P5_ClientPortBinding [reuse]:
+  all-traces
+  "∀ B A p cs cd s tau sp dp #j.
+    (Dispatch( B, A, p, cs, cd, s, tau, sp, dp ) @ #j) ⇒
+    (∃ #i. (Send( A, B, p, cs, cd, s, tau, sp, dp ) @ #i) ∧ (#i < #j))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ B A p cs cd s tau sp dp #j.
+  (Dispatch( B, A, p, cs, cd, s, tau, sp, dp ) @ #j)
+ ∧
+  ∀ #i. (Send( A, B, p, cs, cd, s, tau, sp, dp ) @ #i) ⇒ ¬(#i < #j)"
+*/
+by sorry
+
+/* All wellformedness checks were successful. */
+
+/*
+Generated from:
+Tamarin version 1.12.0
+Maude version 3.5.1
+Git revision: 82780bbaf3328a45f624ddb41e51bf75425f851c (with uncommited changes), branch: master
+Compiled at: 2026-03-07 14:22:39.174278293 UTC
+*/
+
+end
+
+==============================================================================
+summary of summaries:
+
+analyzed: /home/mieno/work/ibcv2-tamarin-rev6/tamarin/ibcv2_transport_nat.spthy
+
+  processing time: 3.65s
+  
+  ExecutableRecv (exists-trace): analysis incomplete (1 steps)
+  ExecutableAck (exists-trace): analysis incomplete (1 steps)
+  ExecutableTimeout (exists-trace): analysis incomplete (1 steps)
+  P1_AuthenticDelivery (all-traces): analysis incomplete (1 steps)
+  P2_ExactlyOnceReceipt (all-traces): analysis incomplete (1 steps)
+  P3_AckCorrespondence (all-traces): analysis incomplete (1 steps)
+  ReceiptBeforeHeight (all-traces): analysis incomplete (1 steps)
+  WitnessBeforeReceiptHeight (all-traces): analysis incomplete (1 steps)
+  P4_TimeoutSafety (all-traces): verified (25 steps)
+  P5_ClientPortBinding (all-traces): analysis incomplete (1 steps)
+
+==============================================================================

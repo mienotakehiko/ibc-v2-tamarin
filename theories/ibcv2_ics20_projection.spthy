@@ -1,0 +1,131 @@
+/*
+ * IBC v2 -- ICS-20 transfer-local projection
+ * Revision: rev6
+ * Target: Tamarin Prover 1.12.0 / Maude 3.5.1
+ *
+ * This theory is intentionally modular. P1--P5, including timeout safety,
+ * are proved in ibcv2_transport_nat.spthy. Here, the already-verified
+ * single-terminal-outcome transport discipline is projected as one linear
+ * PacketOpen token consumed by either receive/mint or timeout/refund.
+ *
+ * Scope: transfer-local safety only. This is NOT a global arithmetic
+ * conservation theorem over total token supply. The transport sequence
+ * allocator is abstracted by a fresh opaque sequence token in this P6-only
+ * projection; monotone sequence arithmetic remains in the transport theory.
+ */
+
+theory IBCv2_ICS20_Projection
+begin
+
+builtins: hashing
+
+rule Setup_Pair:
+  [ Fr(~chainA), Fr(~chainB), Fr(~cs), Fr(~cd),
+    Fr(~srcPort), Fr(~dstPort) ]
+  --[ PairSetup(~chainA, ~cs, ~chainB, ~cd) ]->
+  [ !Pair(~chainA, ~cs, ~chainB, ~cd),
+    !Port(~chainA, ~srcPort), !Port(~chainB, ~dstPort),
+    Out(<~chainA, ~chainB, ~cs, ~cd, ~srcPort, ~dstPort>) ]
+
+rule ICS20_UserFunds:
+  [ !Pair(A, cs, B, cd), Fr(~u), Fr(~v) ]
+  --[ Funded(A, ~u, ~v) ]->
+  [ Funds(A, ~u, ~v) ]
+
+rule ICS20_SendPacket:
+  let
+    data = <'ICS20', u, v>
+    p    = <cs, cd, ~s, tau, srcPort, dstPort, data>
+  in
+  [ !Pair(A, cs, B, cd),
+    !Port(A, srcPort), !Port(B, dstPort),
+    Funds(A, u, v),
+    Fr(~s),
+    In(tau) ]
+  --[ Send(A, B, p, cs, cd, ~s, tau, srcPort, dstPort),
+      Lock(A, B, cs, cd, ~s, u, v) ]->
+  [ !CommitHist(A, cs, ~s, h(p)),
+    PacketOpen(A, B, cs, cd, ~s, p, u, v),
+    Escrow(A, B, cs, cd, ~s, u, v),
+    Out(p) ]
+
+/* Successful delivery branch. PacketOpen is consumed exactly once. */
+rule ICS20_RecvAndMint:
+  let
+    data = <'ICS20', u, v>
+    p    = <cs, cd, s, tau, srcPort, dstPort, data>
+  in
+  [ !Pair(A, cs, B, cd),
+    !CommitHist(A, cs, s, hh),
+    PacketOpen(A, B, cs, cd, s, p, u, v),
+    In(p) ]
+  --[ Eq(hh, h(p)),
+      Recv(B, A, p, cs, cd, s, tau, srcPort, dstPort),
+      Mint(B, A, cs, cd, s, u, v) ]->
+  [ !Receipt(B, cd, s),
+    Voucher(B, A, cs, cd, s, u, v) ]
+
+/* Timeout branch. Its admissibility is justified by P4 in the transport
+ * theory; this projection only reasons about the terminal transfer outcome.
+ *
+ * IMPORTANT (rev6): a refund ends this transfer-local projection in the
+ * terminal RefundedFunds fact.  We intentionally do NOT feed it back into
+ * Funds, because doing so models an unbounded retry/new-transfer loop that is
+ * outside the single-transfer P6 scope.  A later retry would receive a fresh
+ * sequence in a separate transfer instance, so removing that re-entry does not
+ * change the same-sequence Mint-vs-Refund exclusivity property proved here. */
+rule ICS20_TimeoutAndRefund:
+  let
+    data = <'ICS20', u, v>
+    p    = <cs, cd, s, tau, srcPort, dstPort, data>
+  in
+  [ !Pair(A, cs, B, cd),
+    !CommitHist(A, cs, s, hh),
+    PacketOpen(A, B, cs, cd, s, p, u, v),
+    Escrow(A, B, cs, cd, s, u, v),
+    In(p) ]
+  --[ Eq(hh, h(p)),
+      Timeout(A, B, p, cs, cd, s, tau),
+      Refund(A, B, cs, cd, s, u, v) ]->
+  [ RefundedFunds(A, u, v) ]
+
+restriction Equality:
+  "All x y #i. Eq(x,y) @ #i ==> x = y"
+
+lemma ExecutableICS20Mint:
+  exists-trace
+  "Ex A B p cs cd s tau sp dp u v #l #m.
+      Lock(A,B,cs,cd,s,u,v) @ #l &
+      Recv(B,A,p,cs,cd,s,tau,sp,dp) @ #m &
+      Mint(B,A,cs,cd,s,u,v) @ #m & #l < #m"
+
+lemma ExecutableICS20Refund:
+  exists-trace
+  "Ex A B p cs cd s tau u v #l #r.
+      Lock(A,B,cs,cd,s,u,v) @ #l &
+      Timeout(A,B,p,cs,cd,s,tau) @ #r &
+      Refund(A,B,cs,cd,s,u,v) @ #r & #l < #r"
+
+lemma P6_MintImpliesLock [reuse]:
+  "All B A cs cd s u v #m.
+      Mint(B,A,cs,cd,s,u,v) @ #m
+      ==> (Ex #l. Lock(A,B,cs,cd,s,u,v) @ #l & #l < #m)"
+
+lemma P6_RefundImpliesLock [reuse]:
+  "All A B cs cd s u v #r.
+      Refund(A,B,cs,cd,s,u,v) @ #r
+      ==> (Ex #l. Lock(A,B,cs,cd,s,u,v) @ #l & #l < #r)"
+
+lemma P6_NoDoubleMint [reuse]:
+  "All B A cs cd s u1 u2 v1 v2 #i #j.
+      Mint(B,A,cs,cd,s,u1,v1) @ #i &
+      Mint(B,A,cs,cd,s,u2,v2) @ #j
+      ==> #i = #j"
+
+lemma P6_NoMintAndRefund:
+  "All A B cs cd s u1 u2 v1 v2 #m #r.
+      Mint(B,A,cs,cd,s,u1,v1) @ #m &
+      Refund(A,B,cs,cd,s,u2,v2) @ #r
+      ==> F"
+
+end

@@ -1,0 +1,165 @@
+/*
+ * IBC v2 -- P4 timeout-safety experiment using Tamarin's natural-numbers
+ * Target: Tamarin Prover 1.12.0
+ *
+ * Purpose:
+ *   Isolate P4 from ACK / ICS-20 and replace the generic multiset AC theory
+ *   used as arithmetic in rev2 with Tamarin's dedicated natural-numbers
+ *   builtin.  This file is an experimental proof-engineering refinement; it
+ *   does not change the Dolev-Yao relayer abstraction or P4 statement.
+ */
+
+theory IBCv2_P4_Nat
+begin
+
+builtins: hashing, natural-numbers
+
+// ---------------------------------------------------------------------------
+// 0. Pair/client/port setup and local destination height
+// ---------------------------------------------------------------------------
+
+rule Setup_Pair:
+  [ Fr(~chainA), Fr(~chainB), Fr(~cs), Fr(~cd),
+    Fr(~srcPort), Fr(~dstPort) ]
+  --[ PairSetup(~chainA, ~cs, ~chainB, ~cd),
+      PortBound(~chainA, ~srcPort), PortBound(~chainB, ~dstPort) ]->
+  [ !Pair(~chainA, ~cs, ~chainB, ~cd),
+    !Port(~chainA, ~srcPort), !Port(~chainB, ~dstPort),
+    NextSeq(~chainA, ~cs, %1),
+    Height(~chainB, %1),
+    Out(<~chainA, ~chainB, ~cs, ~cd, ~srcPort, ~dstPort>) ]
+
+// Height is a genuine Tamarin Nat counter.
+rule Tick:
+  [ Height(C, %t) ]
+  --[ TickAt(C, %t, %t %+ %1) ]->
+  [ Height(C, %t %+ %1) ]
+
+// A consensus height previously witnessed by the source light client.
+rule Witness_Height:
+  [ Height(C, %t) ]
+  --[ WitnessHeight(C, %t) ]->
+  [ Height(C, %t), !HeightW(C, %t) ]
+
+// ---------------------------------------------------------------------------
+// 1. Send / receive / timeout subset needed for P4
+// ---------------------------------------------------------------------------
+
+rule SendPacket:
+  let
+    p  = <cs, cd, %s, %tau, srcPort, dstPort, ~data>
+    hh = h(p)
+  in
+  [ !Pair(A, cs, B, cd),
+    !Port(A, srcPort), !Port(B, dstPort),
+    NextSeq(A, cs, %s),
+    Fr(~data),
+    In(%tau) ]
+  --[ Send(A, B, p, cs, cd, %s, %tau, srcPort, dstPort) ]->
+  [ !CommitHist(A, cs, %s, hh),
+    CommitOpen(A, cs, %s, hh),
+    RecvOpen(B, cd, %s),
+    NextSeq(A, cs, %s %+ %1),
+    Out(p) ]
+
+rule RecvPacket:
+  let
+    p = <cs, cd, %s, %tau, srcPort, dstPort, data>
+  in
+  [ !Pair(A, cs, B, cd),
+    !CommitHist(A, cs, %s, hh),
+    RecvOpen(B, cd, %s),
+    !Port(B, dstPort),
+    Height(B, %tB),
+    In(p) ]
+  --[ Eq(hh, h(p)),
+      VerifyMembership(A, cs, %s, hh),
+      LeqN(%tB, %tau),
+      Recv(B, A, p, cs, cd, %s, %tau, srcPort, dstPort),
+      RecvAtHeight(B, cd, %s, %tB) ]->
+  [ !Receipt(B, cd, %s),
+    Height(B, %tB) ]
+
+rule TimeoutPacket:
+  let p = <cs, cd, %s, %tau, srcPort, dstPort, data>
+  in
+  [ !Pair(A, cs, B, cd),
+    CommitOpen(A, cs, %s, hh),
+    RecvOpen(B, cd, %s),
+    !HeightW(B, %tW),
+    In(p) ]
+  --[ Eq(hh, h(p)),
+      VerifyNonMembership(B, cd, %s),
+      GtN(%tW, %tau),
+      Timeout(A, B, p, cs, cd, %s, %tau, %tW) ]->
+  [ RecvOpen(B, cd, %s) ]
+
+// ---------------------------------------------------------------------------
+// 2. Restrictions: equality and Nat ordering guards
+// ---------------------------------------------------------------------------
+
+restriction Equality:
+  "All x y #i. Eq(x,y) @ #i ==> x = y"
+
+restriction LeqNat:
+  "All x y #i. LeqN(x,y) @ #i ==> (x = y | x << y)"
+
+restriction GtNat:
+  "All x y #i. GtN(x,y) @ #i ==> y << x"
+
+// ---------------------------------------------------------------------------
+// 3. Sanity traces
+// ---------------------------------------------------------------------------
+
+lemma ExecutableRecv:
+  exists-trace
+  "Ex A B p cs cd s tau sp dp #i #j.
+      Send(A,B,p,cs,cd,s,tau,sp,dp) @ #i &
+      Recv(B,A,p,cs,cd,s,tau,sp,dp) @ #j &
+      #i < #j"
+
+lemma ExecutableTimeout:
+  exists-trace
+  "Ex A B p cs cd s tau sp dp tW #i #k.
+      Send(A,B,p,cs,cd,s,tau,sp,dp) @ #i &
+      Timeout(A,B,p,cs,cd,s,tau,tW) @ #k &
+      #i < #k"
+
+// ---------------------------------------------------------------------------
+// 4. Height helper lemmas
+// ---------------------------------------------------------------------------
+
+lemma ReceiptBeforeHeight [use_induction, reuse]:
+  "All B cd s tR tH #i #j.
+      RecvAtHeight(B,cd,s,tR) @ #i &
+      WitnessHeight(B,tH) @ #j &
+      #i < #j
+      ==> (tR = tH | tR << tH)"
+
+lemma WitnessBeforeReceiptHeight [use_induction, reuse]:
+  "All B cd s tH tR #i #j.
+      WitnessHeight(B,tH) @ #i &
+      RecvAtHeight(B,cd,s,tR) @ #j &
+      #i < #j
+      ==> (tH = tR | tH << tR)"
+
+// ---------------------------------------------------------------------------
+// 5. P4 helper-free / helper-enabled pair
+// ---------------------------------------------------------------------------
+
+lemma P4_TimeoutSafety_NoHelpers
+  [hide_lemma=ReceiptBeforeHeight, hide_lemma=WitnessBeforeReceiptHeight]:
+  "All A B p cs cd s tau tW #k.
+      Timeout(A,B,p,cs,cd,s,tau,tW) @ #k
+      ==>
+      not (Ex sp dp #j.
+             Recv(B,A,p,cs,cd,s,tau,sp,dp) @ #j)"
+
+lemma P4_TimeoutSafety [reuse]:
+  "All A B p cs cd s tau tW #k.
+      Timeout(A,B,p,cs,cd,s,tau,tW) @ #k
+      ==>
+      not (Ex sp dp #j.
+             Recv(B,A,p,cs,cd,s,tau,sp,dp) @ #j)"
+
+end
